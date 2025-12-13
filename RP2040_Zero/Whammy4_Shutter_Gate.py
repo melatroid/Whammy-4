@@ -8,16 +8,16 @@ import time
 # =========================================================
 # DEBUG
 # =========================================================
-DEBUG = False
-DEBUG_A_EVENTS = False
-DEBUG_A_SCOPE = True
+DEBUG = False  # <-- For Tests, set True
+DEBUG_A_EVENTS = False # <-- For Tests, set True
+DEBUG_A_SCOPE = False # <-- For Tests, set True
 SCOPE_EVERY_MS = 5
 SCOPE_WIDTH = 80
 
 # =========================================================
 # DEVELOPMENT BYPASS
 # =========================================================
-DEV_BYPASS_MOMENTARY = False
+DEV_BYPASS_MOMENTARY = False # <-- For Tests, set True
 
 # =========================================================
 # PC SOUND (Serial Frequency Output)
@@ -76,7 +76,7 @@ def map_pot_to_half_ms(v):
     return MAX_HALF_MS - (v * span // 65535)
 
 def a_name(v): return "WET" if v else "DRY"
-def b_name(v): return "ON" if v else "OFF"
+def b_name(v): return "ON" if v else "OFF"  # nur Anzeige
 
 def b_write_raw(v01: int):
     """Schreibt 0/1 auf B, optional invertiert."""
@@ -306,4 +306,5 @@ try:
 except KeyboardInterrupt:
     set_effect(False)
     dbg("Stop -> A=DRY, B=NOT(A)")
+
 
