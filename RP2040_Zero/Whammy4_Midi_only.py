@@ -1,4 +1,4 @@
-# Melatroid - Whammy 4 Version 1.00 
+# Melatroid - Whammy 4 Version 1.01
 from machine import Pin, ADC, UART
 import time
 
@@ -33,8 +33,26 @@ MIDI_BAUD = 31250
 
 MIDI_SEND_ON_START = True
 MIDI_SEND_ON_STOP = False
+
+# IMPORTANT:
+# Whammy 4: bypass PC ist NICHT ein fixer Wert, sondern (active_pc + 17)
+# Trotzdem behalten wir hier den Namen bei, aber wir verwenden ihn NICHT mehr als festen PC.
 MIDI_PC_ON = 12
-MIDI_PC_OFF = 28
+MIDI_PC_OFF = 28  # legacy/unbenutzt für echtes Bypass, siehe midi_bypass_for()
+
+# =========================================================
+# Whammy 4 Bypass Mapping
+# active: 1..17, bypass: 18..34  => bypass = active + 17
+# =========================================================
+BYPASS_OFFSET = 17
+
+def midi_bypass_for(active_pc: int) -> int:
+    pc = int(active_pc) & 0x7F
+    bp = pc + BYPASS_OFFSET
+    # optional clamp (sicher, falls jemand falsche PCs sendet)
+    if bp > 127:
+        bp = 127
+    return bp
 
 # =========================================================
 # MIDI ACCESS MODE / PRESET LOGIC
@@ -72,7 +90,7 @@ PRESETS = [
 # =========================================================
 # 4 Preset Slots
 #   A/B = single tap toggles
-#   C   = long-hold momentary (returns on release)
+#   C   = (nicht mehr als eigenes Momentary im Normalbetrieb)
 #   D   = double-tap persistent
 # =========================================================
 SLOT_A = 0
@@ -84,7 +102,7 @@ slot_index = [0, 0, 0, 0]
 slot_name  = [PRESETS[0][0], PRESETS[0][0], PRESETS[0][0], PRESETS[0][0]]
 slot_pc    = [PRESETS[0][1], PRESETS[0][1], PRESETS[0][1], PRESETS[0][1]]
 
-# base_slot: persistenter Slot (A/B/D) – C ist nur momentary
+# base_slot: persistenter Slot (A/B/D)
 base_slot = SLOT_A
 active_slot = SLOT_A
 edit_slot = SLOT_A
@@ -102,9 +120,6 @@ pending_name = PRESETS[0][0]
 pending_pc = PRESETS[0][1]
 pending_last_change_ms = 0
 
-# >>> FIX: eingefrorener Ziel-Slot fürs Speichern
-pending_target_slot = SLOT_A
-
 last_access = None
 last_access_print_ms = 0
 ACCESS_PRINT_INTERVAL_MS = 200
@@ -120,7 +135,13 @@ HOLD_TO_SWITCH_MS = 450
 tap_down_ms = 0
 
 hold_triggered = False
-in_hold_c = False
+in_momentary_hold = False
+
+# --- track current effect state and momentary snapshot ---
+effect_is_on = False                # unser interner Stand (ON/OFF)
+momentary_saved_on = False          # Zustand vor Hold
+momentary_slot = SLOT_A             # welches Preset wurde momentary benutzt
+momentary_pc = PRESETS[0][1]        # PC zum Momentary-Slot (für korrektes Bypass)
 
 # Normal-mode single/double tap state
 pending_single_tap = False
@@ -145,11 +166,19 @@ def midi_pc_send(program: int, channel=MIDI_CH):
     status = 0xC0 | (channel & 0x0F)
     midi_write(bytes([status, program & 0x7F]))
 
+def midi_send_active(pc: int):
+    midi_pc_send(pc)
+
+def midi_send_bypass_for(pc_active: int):
+    midi_pc_send(midi_bypass_for(pc_active))
+
 def midi_confirm_preset(pc: int):
+    # bestätigt Preset, ohne auf "falsches" fixed OFF zu springen:
+    # OFF = bypass zu genau diesem pc
     for _ in range(CONFIRM_TOGGLES):
-        midi_pc_send(MIDI_PC_OFF)
+        midi_send_bypass_for(pc)
         time.sleep_ms(CONFIRM_DELAY_MS)
-        midi_pc_send(pc)
+        midi_send_active(pc)
         time.sleep_ms(CONFIRM_DELAY_MS)
 
 def set_base_slot(new_slot: int):
@@ -197,7 +226,7 @@ def update_access_logic(now_ms: int) -> bool:
                 dur = time.ticks_diff(now_ms, access_down_ms)
                 if dur < ACCESS_HOLD_MS:
                     toggle_ab_slot()
-                    midi_pc_send(slot_pc[active_slot])
+                    midi_send_active(slot_pc[active_slot])
                     dbg(f"SLOT SWITCH (GPIO14) -> {active_slot} {slot_name[active_slot]} PC {slot_pc[active_slot]}")
             access_hold_armed = False
 
@@ -222,10 +251,10 @@ def set_effect(on: bool, suppress_midi: bool = False):
     active = True if on else False
     if on:
         if (not suppress_midi) and MIDI_SEND_ON_START:
-            midi_pc_send(slot_pc[active_slot])
+            midi_send_active(slot_pc[active_slot])
     else:
         if (not suppress_midi) and MIDI_SEND_ON_STOP:
-            midi_pc_send(MIDI_PC_OFF)
+            midi_send_bypass_for(slot_pc[active_slot])
 
 set_effect(False)
 
@@ -248,11 +277,6 @@ try:
             raw_access_pin = midi_access.value()
             print("GPIO14 raw =", raw_access_pin, "=> MIDI_ACCESS =", access)
 
-            # Exit access: wenn C aktiv war, zurück zu base_slot
-            if (last_access is True) and (access is False):
-                if active_slot == SLOT_C:
-                    active_slot = base_slot
-
             last_access = access
             last_access_print_ms = now
 
@@ -265,18 +289,14 @@ try:
             # reset
             tap_down_ms = 0
             hold_triggered = False
-            in_hold_c = False
+            in_momentary_hold = False
             pending_single_tap = False
 
             if access:
-                # WICHTIG: wenn gerade momentary C aktiv ist, editiere base_slot, nicht C
-                if active_slot == SLOT_C:
-                    edit_slot = base_slot
-                else:
-                    edit_slot = active_slot
-
+                edit_slot = active_slot
                 active_slot = edit_slot
-                midi_pc_send(slot_pc[edit_slot])
+                midi_send_active(slot_pc[edit_slot])
+                effect_is_on = True
                 preset_index = slot_index[edit_slot]
                 pending_active = False
 
@@ -298,7 +318,8 @@ try:
                 if 0 < dt <= DOUBLE_CLICK_MS:
                     edit_slot = (edit_slot + 1) % 4
                     active_slot = edit_slot
-                    midi_pc_send(slot_pc[edit_slot])
+                    midi_send_active(slot_pc[edit_slot])
+                    effect_is_on = True
                     preset_index = slot_index[edit_slot]
                     pending_active = False
                     _last_press_ms_access = 0
@@ -318,10 +339,10 @@ try:
             if press_edge:
                 preset_index = (preset_index + scroll_dir) % len(PRESETS)
                 name, pc = PRESETS[preset_index]
-                midi_pc_send(pc)
+                midi_send_active(pc)
+                effect_is_on = True
 
                 pending_active = True
-                pending_target_slot = edit_slot   # >>> FIX: Ziel-Slot einfrieren
                 pending_index, pending_name, pending_pc = preset_index, name, pc
                 pending_last_change_ms = now
 
@@ -333,35 +354,30 @@ try:
                     last_preset_step_ms = now
                     preset_index = (preset_index + scroll_dir) % len(PRESETS)
                     name, pc = PRESETS[preset_index]
-                    midi_pc_send(pc)
+                    midi_send_active(pc)
+                    effect_is_on = True
 
                     pending_active = True
-                    pending_target_slot = edit_slot  # >>> FIX: Ziel-Slot einfrieren
                     pending_index, pending_name, pending_pc = preset_index, name, pc
                     pending_last_change_ms = now
 
             if not foot_pressed:
                 last_preset_step_ms = now
 
-            # Save after idle -> überschreibt NUR den Slot, in dem die Auswahl gestartet wurde
-            if pending_active \
-               and (time.ticks_diff(now, pending_last_change_ms) >= PENDING_SAVE_MS) \
-               and (not foot_pressed):  # >>> FIX: nur wenn losgelassen
-
-                t = pending_target_slot
-
-                slot_index[t] = pending_index
-                slot_name[t]  = pending_name
-                slot_pc[t]    = pending_pc
+            if pending_active and (time.ticks_diff(now, pending_last_change_ms) >= PENDING_SAVE_MS):
+                slot_index[edit_slot] = pending_index
+                slot_name[edit_slot] = pending_name
+                slot_pc[edit_slot] = pending_pc
                 pending_active = False
 
-                midi_confirm_preset(slot_pc[t])
+                midi_confirm_preset(slot_pc[edit_slot])
 
-                # bleibe auf edit_slot (Preview), gespeicherter Slot ist t
                 active_slot = edit_slot
-                midi_pc_send(slot_pc[active_slot])
-                preset_index = slot_index[active_slot]
+                midi_send_active(slot_pc[edit_slot])
+                effect_is_on = True
+                preset_index = slot_index[edit_slot]
 
+                pending_active = False
                 _last_press_ms_access = 0
                 last_preset_step_ms = now
 
@@ -372,7 +388,9 @@ try:
         # NORMAL MODE
         # - single tap: A/B toggle (confirmed after window)
         # - double tap: Slot D persistent
-        # - hold: Slot C momentary, release -> back to base_slot (A/B/D)
+        # - hold: MOMENTARY ON while held:
+        #         when hold triggers -> ON immediately (if it was OFF)
+        #         on release -> BYPASS (korrekt zu diesem preset!)
         # =========================================================
         if not DEV_BYPASS_MOMENTARY:
             raw_sw = sw.value()
@@ -387,18 +405,19 @@ try:
                 if stable_sw == 0:
                     tap_down_ms = now
                     hold_triggered = False
-                    in_hold_c = False
+                    in_momentary_hold = False
 
                 # RELEASE
                 else:
                     dur = time.ticks_diff(now, tap_down_ms)
 
-                    if hold_triggered and in_hold_c:
-                        # back to base slot
-                        active_slot = base_slot
-                        midi_pc_send(slot_pc[active_slot])
+                    if hold_triggered and in_momentary_hold:
+                        # Momentary ends: BYPASS on release (dynamic)
+                        in_momentary_hold = False
+                        midi_send_bypass_for(momentary_pc)
+                        effect_is_on = False
                         if DEBUG:
-                            print("HOLD RELEASE -> BACK TO", active_slot, slot_name[active_slot], "PC", slot_pc[active_slot])
+                            print("HOLD RELEASE -> MOMENTARY BYPASS", midi_bypass_for(momentary_pc), "(from pc", momentary_pc, ")")
 
                     elif dur < HOLD_TO_SWITCH_MS:
                         # Tap (single/double)
@@ -406,7 +425,8 @@ try:
                             # DOUBLE TAP
                             pending_single_tap = False
                             set_base_slot(SLOT_D)
-                            midi_pc_send(slot_pc[active_slot])
+                            midi_send_active(slot_pc[active_slot])
+                            effect_is_on = True
                             if DEBUG:
                                 print("DOUBLE TAP -> SLOT_D", slot_name[active_slot], "PC", slot_pc[active_slot])
                         else:
@@ -423,27 +443,36 @@ try:
             if time.ticks_diff(now, pending_single_tap_ms) > DOUBLE_CLICK_MS:
                 pending_single_tap = False
                 toggle_ab_slot()
-                midi_pc_send(slot_pc[active_slot])
+                midi_send_active(slot_pc[active_slot])
+                effect_is_on = True
                 if DEBUG:
                     print("SINGLE TAP (confirmed) ->", active_slot, slot_name[active_slot], "PC", slot_pc[active_slot])
 
-        # HOLD detection while pressed (momentary C)
+        # HOLD detection while pressed (momentary ON while held)
         if (not access) and (not DEV_BYPASS_MOMENTARY):
             if stable_sw == 0 and (not hold_triggered):
                 if time.ticks_diff(now, tap_down_ms) >= HOLD_TO_SWITCH_MS:
                     # hold cancels pending single tap
                     pending_single_tap = False
 
-                    active_slot = SLOT_C
-                    in_hold_c = True
-                    hold_triggered = True
-                    midi_pc_send(slot_pc[active_slot])
+                    # snapshot current state
+                    momentary_slot = active_slot
+                    momentary_pc = slot_pc[momentary_slot]
+                    momentary_saved_on = effect_is_on
 
-                    if DEBUG:
-                        print("HOLD -> SLOT_C", slot_name[active_slot], "PC", slot_pc[active_slot])
+                    in_momentary_hold = True
+                    hold_triggered = True
+
+                    # ON immediately if it was OFF
+                    if not momentary_saved_on:
+                        midi_send_active(momentary_pc)
+                        effect_is_on = True
+                        if DEBUG:
+                            print("HOLD -> MOMENTARY ON", momentary_slot, slot_name[momentary_slot], "PC", momentary_pc)
 
         time.sleep_ms(1)
 
 except KeyboardInterrupt:
     set_effect(False)
+
 
