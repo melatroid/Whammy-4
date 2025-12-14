@@ -1,6 +1,7 @@
 # Melatroid - Whammy 4from machine import Pin, ADC, UART
+from machine import Pin, ADC, UART
 import time
-
+    
 # =========================================================
 # DEBUG
 # =========================================================
@@ -462,6 +463,7 @@ try:
 
             # --- auto-commit after inactivity ---
             if pending_active and (time.ticks_diff(now, pending_last_change_ms) >= PENDING_SAVE_MS):
+                # commit current slot
                 slot_index[edit_slot] = pending_index
                 slot_name[edit_slot] = pending_name
                 slot_pc[edit_slot] = pending_pc
@@ -471,6 +473,23 @@ try:
 
                 if DEBUG:
                     print("COMMIT SLOT", edit_slot, "->", slot_index[edit_slot], slot_name[edit_slot], "PC", slot_pc[edit_slot])
+
+                # =========================================================
+                # NEW: after committing preset for slot 1, automatically start
+                # selection for slot 2 (toggle edit_slot and preview it)
+                # =========================================================
+                edit_slot = SLOT_B if edit_slot == SLOT_A else SLOT_A
+
+                # preview stored preset of the new edit slot
+                midi_pc(slot_pc[edit_slot])
+
+                # align scroll cursor to the stored preset of the new slot
+                preset_index = slot_index[edit_slot]
+
+                # start clean (avoid accidental commit/doubleclick carryover)
+                pending_active = False
+                _last_press_ms_access = 0
+                last_preset_step_ms = now
 
             time.sleep_ms(1)
             continue
