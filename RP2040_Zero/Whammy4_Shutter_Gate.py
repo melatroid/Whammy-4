@@ -1,5 +1,4 @@
-# Melatroid - Whammy 4
-from machine import Pin, ADC, UART
+# Melatroid - Whammy 4from machine import Pin, ADC, UART
 import time
 
 # =========================================================
@@ -41,9 +40,9 @@ MIDI_CH = 3
 MIDI_BAUD = 31250
 
 MIDI_SEND_ON_START = True
-MIDI_SEND_ON_STOP = False   # wichtig: beim Stop NICHTS senden (Whammy bleibt an)
+MIDI_SEND_ON_STOP = False
 MIDI_PC_ON = 12
-MIDI_PC_OFF = 28            # genutzt für Confirm-Toggle
+MIDI_PC_OFF = 28 
 
 # =========================================================
 # MIDI ACCESS MODE / PRESET LOGIC
@@ -110,11 +109,13 @@ _last_press_ms_access = 0
 
 # ---------------------------------------------------------
 # NORMAL MODE: robust double-tap detection on RELEASE
-# (instead of detecting on PRESS, which conflicts with momentary shutter)
+# and IMPORTANT: NO relay output (GPIO2/3) while user is tapping.
+# Shutter starts only after HOLD (press longer than TAP_MAX_MS)
 # ---------------------------------------------------------
 tap_down_ms = 0
 last_tap_up_ms = 0
 tap_armed = False
+pending_shutter = False
 
 TAP_MAX_MS = 170     # max duration of a tap
 DTAP_GAP_MS = 260    # max allowed gap between taps (release->release)
@@ -362,6 +363,7 @@ try:
             tap_down_ms = 0
             last_tap_up_ms = 0
             tap_armed = False
+            pending_shutter = False
 
             if access:
                 set_A_and_B(WET)
@@ -395,7 +397,7 @@ try:
             foot_pressed = (raw == 0)
             press_edge = (_last_sw_raw == 1 and raw == 0)
 
-            # --- double click => CHANGE SCROLL DIRECTION ONLY (NO MIDI) ---
+            # --- double click => TOGGLE EDIT SLOT A/B (NO MIDI scroll dir change) ---
             if press_edge:
                 dt = time.ticks_diff(now, _last_press_ms_access)
                 if 0 < dt <= DOUBLE_CLICK_MS:
@@ -476,7 +478,10 @@ try:
         # =========================================================
         # NORMAL MODE: Momentary = Shutter
         # + double tap toggles active_slot (Preset A/B)
-        #   (robust detection on RELEASE)
+        #   IMPORTANT: NO RELAY output while tapping:
+        #   - PRESS starts "pending_shutter"
+        #   - if HOLD > TAP_MAX_MS => start shutter (relays switch)
+        #   - release before that => it's a tap (no relays touched)
         # =========================================================
         if not DEV_BYPASS_MOMENTARY:
             raw_sw = sw.value()
@@ -491,21 +496,18 @@ try:
                 # -------- PRESS (debounced) --------
                 if stable_sw == 0:
                     tap_down_ms = now
-
-                    # momentary shutter ON
-                    if not active:
-                        set_effect(True)
+                    pending_shutter = True  # decide later if it's hold
 
                 # -------- RELEASE (debounced) --------
                 else:
-                    # momentary shutter OFF
+                    # If shutter already running -> stop
                     if active:
                         set_effect(False)
 
-                    # check if this release qualifies as a "tap"
                     dur = time.ticks_diff(now, tap_down_ms)
 
-                    if 0 <= dur <= TAP_MAX_MS:
+                    # If we never started shutter, a short press counts as tap
+                    if pending_shutter and 0 <= dur <= TAP_MAX_MS:
                         gap = time.ticks_diff(now, last_tap_up_ms)
 
                         if tap_armed and 0 <= gap <= DTAP_GAP_MS:
@@ -514,7 +516,7 @@ try:
                             tap_armed = False
                             last_tap_up_ms = 0
 
-                            # immediate feedback: send preset of selected slot
+                            # immediate feedback: send preset of selected slot (MIDI only)
                             midi_pc(slot_pc[active_slot])
 
                             if DEBUG:
@@ -524,9 +526,17 @@ try:
                             tap_armed = True
                             last_tap_up_ms = now
                     else:
-                        # not a tap -> disarm
+                        # not a tap (or shutter was started) -> disarm
                         tap_armed = False
                         last_tap_up_ms = 0
+
+                    pending_shutter = False
+
+            # Start shutter only if still pressed and held long enough
+            if pending_shutter and (sw.value() == 0) and (not active):
+                if time.ticks_diff(now, tap_down_ms) > TAP_MAX_MS:
+                    pending_shutter = False
+                    set_effect(True)
 
             # disarm pending double tap if timed out
             if tap_armed and time.ticks_diff(now, last_tap_up_ms) > DTAP_GAP_MS:
