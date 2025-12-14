@@ -1,4 +1,4 @@
-# Melatroid - Whammy 4from machine import Pin, ADC, UART
+# Melatroid - Whammy 4
 from machine import Pin, ADC, UART
 import time
     
