@@ -1,4 +1,4 @@
-# Whammy 4 - God Mode
+# --Whammy 4 - God Mode--
 This is a Modification for the Digitech Whammy 4-
 Its under Development
 
