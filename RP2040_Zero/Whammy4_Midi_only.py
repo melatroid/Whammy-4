@@ -1,6 +1,4 @@
-# Melatroid - Whammy 4 Version 1.00
-
-# Melatroid - Whammy 4 Version 1.00 (NO SHUTTER + NO GPIO2/3 RELAYS)
+# Melatroid - Whammy 4 Version 1.00 
 from machine import Pin, ADC, UART
 import time
 
