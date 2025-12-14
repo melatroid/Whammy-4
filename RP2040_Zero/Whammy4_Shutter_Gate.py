@@ -88,8 +88,8 @@ SLOT_A = 0
 SLOT_B = 1
 
 slot_index = [0, 0]
-slot_name = [PRESETS[0][0], PRESETS[0][0]]
-slot_pc   = [PRESETS[0][1], PRESETS[0][1]]
+slot_name  = [PRESETS[0][0], PRESETS[0][0]]
+slot_pc    = [PRESETS[0][1], PRESETS[0][1]]
 
 # Normal shutter mode: which preset slot is used
 active_slot = SLOT_A
@@ -102,9 +102,22 @@ preset_index = 0
 last_preset_step_ms = 0
 scroll_dir = 1  # +1 forward, -1 backward
 
-# Click tracking (shared)
+# Click tracking (shared raw edge)
 _last_sw_raw = 1
-_last_press_ms = 0  # used for double click timing
+
+# IMPORTANT FIX: separate double-click timing for access vs normal mode
+_last_press_ms_access = 0
+
+# ---------------------------------------------------------
+# NORMAL MODE: robust double-tap detection on RELEASE
+# (instead of detecting on PRESS, which conflicts with momentary shutter)
+# ---------------------------------------------------------
+tap_down_ms = 0
+last_tap_up_ms = 0
+tap_armed = False
+
+TAP_MAX_MS = 170     # max duration of a tap
+DTAP_GAP_MS = 260    # max allowed gap between taps (release->release)
 
 # Pending selection (Access mode)
 pending_active = False
@@ -314,8 +327,6 @@ def set_effect(on: bool, suppress_midi: bool = False):
         if DEBUG_A_SCOPE:
             print("\n[SCOPE STOP]\n")
 
-        # IMPORTANT: no MIDI OFF sent here (Whammy stays on)
-
 # Boot-safe
 set_effect(False)
 
@@ -340,20 +351,32 @@ try:
             last_access = access
             last_access_print_ms = now
 
+            # reset tracking on mode switch
+            _last_sw_raw = 1
+            _last_press_ms_access = 0
+            stable_sw = sw.value()
+            last_sw = stable_sw
+            last_change = now
+
+            # reset normal-mode double tap state too
+            tap_down_ms = 0
+            last_tap_up_ms = 0
+            tap_armed = False
+
             if access:
-                # Enter access mode: keep audio feedback on
                 set_A_and_B(WET)
 
-                # preview current edit slot immediately
+                # Always edit the slot that is currently active in normal mode.
+                edit_slot = active_slot
+
+                # Preview the stored preset of that slot
                 midi_pc(slot_pc[edit_slot])
 
-                # align scroll cursor with stored preset
+                # Align scroll cursor with stored preset
                 preset_index = slot_index[edit_slot]
 
-                # clear pending
                 pending_active = False
             else:
-                # Exit access mode: return to DRY unless shutter is active
                 if not active:
                     set_A_and_B(DRY)
 
@@ -363,11 +386,6 @@ try:
 
         # =========================================================
         # MIDI ACCESS MODE
-        # - WET always on (direct feedback)
-        # - tap/hold => preview next presets (pending)
-        # - DOUBLE CLICK => ONLY CHANGE DIRECTION (NO MIDI!)
-        # - auto-save after 2 seconds inactivity:
-        #   then MIDI confirm (3x OFF/ON) and end ON
         # =========================================================
         if access:
             if a_state != WET:
@@ -379,18 +397,29 @@ try:
 
             # --- double click => CHANGE SCROLL DIRECTION ONLY (NO MIDI) ---
             if press_edge:
-                dt = time.ticks_diff(now, _last_press_ms)
+                dt = time.ticks_diff(now, _last_press_ms_access)
                 if 0 < dt <= DOUBLE_CLICK_MS:
-                    scroll_dir *= -1
-                    _last_press_ms = 0
+                    # toggle which slot we are editing
+                    edit_slot = SLOT_B if edit_slot == SLOT_A else SLOT_A
+
+                    # preview stored preset of that slot
+                    midi_pc(slot_pc[edit_slot])
+
+                    # align scroll cursor to that slot's stored preset
+                    preset_index = slot_index[edit_slot]
+
+                    # clear pending (so we don't accidentally commit old selection)
+                    pending_active = False
+
+                    _last_press_ms_access = 0
                     if DEBUG:
-                        print("SCROLL DIR ->", "BACKWARD" if scroll_dir < 0 else "FORWARD")
+                        print("EDIT SLOT ->", edit_slot, "PREVIEW", slot_name[edit_slot], "PC", slot_pc[edit_slot])
 
                     _last_sw_raw = raw
                     time.sleep_ms(1)
                     continue
                 else:
-                    _last_press_ms = now
+                    _last_press_ms_access = now
 
             _last_sw_raw = raw
             stepped = False
@@ -409,7 +438,7 @@ try:
                 stepped = True
 
                 if DEBUG:
-                    print("PREVIEW (tap):", preset_index, name, "PC", pc)
+                    print("PREVIEW (tap):", preset_index, name, "PC", pc, "-> pending write to SLOT", edit_slot)
 
             # --- hold => scroll preview ---
             if foot_pressed and (not stepped):
@@ -424,7 +453,7 @@ try:
                     pending_last_change_ms = now
 
                     if DEBUG:
-                        print("PREVIEW (hold):", preset_index, name, "PC", pc)
+                        print("PREVIEW (hold):", preset_index, name, "PC", pc, "-> pending write to SLOT", edit_slot)
 
             if not foot_pressed:
                 last_preset_step_ms = now
@@ -436,7 +465,6 @@ try:
                 slot_pc[edit_slot] = pending_pc
                 pending_active = False
 
-                # MIDI-only confirmation (3x OFF/ON), end ON
                 midi_confirm_preset(slot_pc[edit_slot])
 
                 if DEBUG:
@@ -447,7 +475,8 @@ try:
 
         # =========================================================
         # NORMAL MODE: Momentary = Shutter
-        # + double click toggles active_slot (Preset A/B)
+        # + double tap toggles active_slot (Preset A/B)
+        #   (robust detection on RELEASE)
         # =========================================================
         if not DEV_BYPASS_MOMENTARY:
             raw_sw = sw.value()
@@ -459,25 +488,50 @@ try:
             if time.ticks_diff(now, last_change) >= DEBOUNCE_MS and stable_sw != last_sw:
                 stable_sw = last_sw
 
-                # press event (debounced) -> detect double click for slot toggle
+                # -------- PRESS (debounced) --------
                 if stable_sw == 0:
-                    dt = time.ticks_diff(now, _last_press_ms)
-                    if 0 < dt <= DOUBLE_CLICK_MS:
-                        active_slot = SLOT_B if active_slot == SLOT_A else SLOT_A
-                        _last_press_ms = 0
+                    tap_down_ms = now
 
-                        # immediate feedback: send preset of selected slot
-                        midi_pc(slot_pc[active_slot])
+                    # momentary shutter ON
+                    if not active:
+                        set_effect(True)
 
-                        if DEBUG:
-                            print("ACTIVE SLOT ->", active_slot, slot_name[active_slot], "PC", slot_pc[active_slot])
+                # -------- RELEASE (debounced) --------
+                else:
+                    # momentary shutter OFF
+                    if active:
+                        set_effect(False)
+
+                    # check if this release qualifies as a "tap"
+                    dur = time.ticks_diff(now, tap_down_ms)
+
+                    if 0 <= dur <= TAP_MAX_MS:
+                        gap = time.ticks_diff(now, last_tap_up_ms)
+
+                        if tap_armed and 0 <= gap <= DTAP_GAP_MS:
+                            # DOUBLE TAP => toggle slot
+                            active_slot = SLOT_B if active_slot == SLOT_A else SLOT_A
+                            tap_armed = False
+                            last_tap_up_ms = 0
+
+                            # immediate feedback: send preset of selected slot
+                            midi_pc(slot_pc[active_slot])
+
+                            if DEBUG:
+                                print("ACTIVE SLOT ->", active_slot, slot_name[active_slot], "PC", slot_pc[active_slot])
+                        else:
+                            # first tap: arm for a second tap
+                            tap_armed = True
+                            last_tap_up_ms = now
                     else:
-                        _last_press_ms = now
+                        # not a tap -> disarm
+                        tap_armed = False
+                        last_tap_up_ms = 0
 
-                # normal shutter on/off
-                want_on = (stable_sw == 0)
-                if want_on != active:
-                    set_effect(want_on)
+            # disarm pending double tap if timed out
+            if tap_armed and time.ticks_diff(now, last_tap_up_ms) > DTAP_GAP_MS:
+                tap_armed = False
+
         else:
             if not active:
                 set_effect(True)
@@ -506,5 +560,4 @@ try:
 
 except KeyboardInterrupt:
     set_effect(False)
-
 
