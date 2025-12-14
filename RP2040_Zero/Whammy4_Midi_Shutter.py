@@ -1,3 +1,4 @@
+# Melatroid - Whammy 4 Version 1.00
 from machine import Pin, ADC, UART
 import time
 
@@ -586,3 +587,4 @@ try:
 
 except KeyboardInterrupt:
     set_effect(False)
+
