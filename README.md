@@ -7,7 +7,8 @@ Its under Development
 # Midi Access - Works
 # Set / Change Effectpresets with Momentory - Works
 # Fast Change Presets with Momentory - Works
-
 # Shutter Speed       - Works
-# Momentary / Shutter - Under Development
+# Momentary / Shutter - Works
+
+# 4053BE Real Shutter - Under Development
 
