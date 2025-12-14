@@ -8,5 +8,6 @@ Its under Development
 # Set / Change Effectpresets with Momentory - Works
 # Fast Change Presets with Momentory - Works
 
+# Shutter Speed       - Works
 # Momentary / Shutter - Under Development
-# Shutter Speed       - Under Development
+
