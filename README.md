@@ -6,6 +6,7 @@ Its under Development
 # Blend Mixer - Works
 # Calibration - Works
 # Midi Access - Works
+# Editable Jammer Effect - Under Development
 # Set / Change Effectpresets with Momentory - Works
 # Fast Change Presets with Momentory - Works
 # Shutter Speed       - Works
