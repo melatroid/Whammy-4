@@ -1,7 +1,7 @@
 # --Whammy 4 - God Mode--
 This is a Modification for the Digitech Whammy 4- <br><br>
 <h1>
-!!! Attention !!!
+!!! Attention !!!<br>
 This Modification could brick your Device!
 <h1>
 NEW SOFTWARE RELEASE SOON.<br>
