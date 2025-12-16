@@ -1,3 +1,4 @@
+# Melatroid - Whammy 4 MIDI TEST - SWITCHES AND MIDI CHANNELS 1.10 
 from machine import Pin, ADC, UART
 import time
 
@@ -157,4 +158,5 @@ try:
 
 except KeyboardInterrupt:
     print("\nTest stopped.")
+
 
