@@ -1,5 +1,5 @@
 # --Whammy 4 - God Mode--
-This is a Modification for the Digitech Whammy 4-
+This is a Modification for the Digitech Whammy 4- <br>
 !!! Attention !!!
 Im Working at a Jailbreak that Overload the Whammy Software.
 NEW SOFTWARE RELEASE SOON.
