@@ -3,10 +3,10 @@ This is a Modification for the Digitech Whammy 4- <br><br>
 <h1>
 !!! Attention !!!
 <h1>
-Im Working at a Jailbreak that Overload the Whammy Software.<br>
 NEW SOFTWARE RELEASE SOON.<br>
+Im Working at a Jailbreak that Overload the Whammy Software.<br>
 KEEP CALM.<br>
-<br>
+
 # True Bypass - Works
 # Blend Mixer - Works
 # Calibration - Works
