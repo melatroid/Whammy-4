@@ -1,6 +1,9 @@
 # --Whammy 4 - God Mode--
 This is a Modification for the Digitech Whammy 4-
-Its under Development
+!!! Attention !!!
+Im Working at a Jailbreak that Overload the Whammy Software.
+NEW SOFTWARE RELEASE SOON.
+KEEP CALM.
 
 # True Bypass - Works
 # Blend Mixer - Works
