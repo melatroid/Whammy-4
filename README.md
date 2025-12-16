@@ -1,5 +1,9 @@
 # --Whammy 4 - God Mode--
-This is a Modification for the Digitech Whammy 4- <br><br>
+This is a Modification for the Digitech Whammy 4- <br>
+You get full Access to Midi Functions, with a Microcontroller inside. <br>
+Im Working on nice Software for Whammy 4, that you can easly update. <br>
+You need all modifications to use the featueres. Good Luck <br>
+Software is OpenSource. <br>
 <h1>
 !!! Attention !!!<br>
 This Modification could brick your Device!
