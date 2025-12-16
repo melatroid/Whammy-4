@@ -1,134 +1,160 @@
-from machine import UART, Pin
+from machine import Pin, ADC, UART
 import time
 
-# ============================
-# MIDI OUT CONFIG
-# ============================
+SHOWVALUES = True
+TEST_CHANNELS = True
+
+PIN_FOOTSW = 4
+PIN_LAYER_SWITCH = 14
+PIN_POT = 26
+
+DEBOUNCE_MS = 30
+POLL_MS = 5
+PRINT_EVERY_MS = 1000
+
+POT_SMOOTH_ALPHA_NUM = 1
+POT_SMOOTH_ALPHA_DEN = 8
+POT_PRINT_THRESHOLD_8BIT = 3
+
+MIDI_ENABLED = True
 MIDI_UART_ID = 0
-MIDI_TX_PIN = 0           # GPIO0 -> MIDI DIN Pin 5 (via 220Ω)
+MIDI_TX_PIN = 0
 MIDI_BAUD = 31250
 
-# ============================
-# TARGET CHANNEL
-# ============================
-TARGET_CH = 3  # 0-based: 3 = MIDI Channel 4
+CHANNEL_TEST_SEND_CC0 = True
+CHANNEL_TEST_SEND_PC = True
+CHANNEL_TEST_CC_NUM = 0
+CHANNEL_TEST_CC_ON = 127
+CHANNEL_TEST_CC_OFF = 0
+CHANNEL_TEST_PULSE_MS = 60
 
-# ============================
-# WHAMMY 4 (Manual) Mappings
-# ============================
-# Program Changes laut Manual:
-# PC  1..17  = ACTIVE (Effect on)
-# PC 18..34  = BYPASS (Effect off)
-WHAMMY_PRESETS = [
-    ("Detune Shallow", 1),
-    ("Detune Deep", 2),
-    ("Whammy +2 Oct", 3),
-    ("Whammy +1 Oct", 4),
-    ("Whammy -1 Oct", 5),
-    ("Whammy -2 Oct", 6),
-    ("Whammy Dive Bomb", 7),
-    ("Whammy Drop Tune", 8),
-    ("Harmony Oct/Oct", 9),
-    ("Harmony 5th/4th", 10),
-    ("Harmony 4th/3rd", 11),
-    ("Harmony 5th/7th", 12),
-    ("Harmony 5th/6th", 13),
-    ("Harmony 4th/5th", 14),
-    ("Harmony 3rd/4th", 15),
-    ("Harmony b3rd/3rd", 16),
-    ("Harmony 2nd/3rd", 17),
+PRESETS = [
+    ("Detune Shallow", 0),
+    ("Detune Deep", 1),
+    ("Whammy: Up 2 Oct", 2),
+    ("Whammy: Up 1 Oct", 3),
+    ("Whammy: Down 1 Oct", 4),
+    ("Whammy: Down 2 Oct", 5),
+    ("Whammy: Dive Bomb", 6),
+    ("Whammy: Drop Tune", 7),
+    ("Harmony: 2nd/3rd", 8),
+    ("Harmony: b3rd/3rd", 9),
+    ("Harmony: 3rd/4th", 10),
+    ("Harmony: 4th/5th", 11),
+    ("Harmony: 5th/6th", 12),
+    ("Harmony: 5th/7th", 13),
+    ("Harmony: 4th/3rd", 14),
+    ("Harmony: 5th/4th", 15),
+    ("Harmony: Oct/Oct", 16),
 ]
 
-def pc_bypass(pc_active: int) -> int:
-    return pc_active + 17  # Manual: bypass = active + 17
+footsw = Pin(PIN_FOOTSW, Pin.IN, Pin.PULL_UP)
+layer_sw = Pin(PIN_LAYER_SWITCH, Pin.IN, Pin.PULL_UP)
+pot = ADC(Pin(PIN_POT))
 
-# ============================
-# TEST SETTINGS
-# ============================
-PAUSE_BETWEEN_MSG = 1000    
+midi = None
+if MIDI_ENABLED:
+    midi = UART(MIDI_UART_ID, baudrate=MIDI_BAUD, tx=Pin(MIDI_TX_PIN))
 
-TEST_PROGRAM_CHANGE = True
-TEST_CC0_ON_OFF = True
-TEST_CC11_SWEEP = False   
+def midi_write(data):
+    if MIDI_ENABLED and midi is not None:
+        midi.write(data)
 
-# CC11 Sweep Settings
-CC11_STEP_DELAY_MS = 20
-CC11_STEP = 8              
+def midi_cc(cc, val, ch0):
+    midi_write(bytes([0xB0 | (ch0 & 0x0F), cc & 0x7F, val & 0x7F]))
 
-# ============================
-# SETUP
-# ============================
-uart = UART(MIDI_UART_ID, baudrate=MIDI_BAUD, tx=Pin(MIDI_TX_PIN))
+def midi_pc(pc, ch0):
+    midi_write(bytes([0xC0 | (ch0 & 0x0F), pc & 0x7F]))
 
-def midi_pc(program: int, channel: int):
-    """Program Change: 0xC0..0xCF + program"""
-    status = 0xC0 | (channel & 0x0F)
-    uart.write(bytes([status, program & 0x7F]))
+def debounce_init(pin):
+    v = pin.value()
+    now = time.ticks_ms()
+    return {"stable": v, "last_raw": v, "last_change_ms": now}
 
-def midi_cc(cc: int, val: int, channel: int):
-    """Control Change: 0xB0..0xBF + cc + val"""
-    status = 0xB0 | (channel & 0x0F)
-    uart.write(bytes([status, cc & 0x7F, val & 0x7F]))
+def debounce_update(pin, state, now_ms):
+    raw = pin.value()
+    if raw != state["last_raw"]:
+        state["last_raw"] = raw
+        state["last_change_ms"] = now_ms
+    if time.ticks_diff(now_ms, state["last_change_ms"]) >= DEBOUNCE_MS:
+        if state["stable"] != state["last_raw"]:
+            state["stable"] = state["last_raw"]
 
-def log(msg):
-    print(msg)
+def pressed_from_pullup(stable_raw):
+    return stable_raw == 0
 
-def test_cc0(channel: int):
-    # CC0: 0..64 OFF, 65..127 ON
-    log(f"CH {channel+1:02d} -> CC0 OFF")
-    midi_cc(0, 0, channel)
-    time.sleep_ms(PAUSE_BETWEEN_MSG)
+def adc_to_8bit(v_u16):
+    return (v_u16 * 255 + 32767) // 65535
 
-    log(f"CH {channel+1:02d} -> CC0 ON")
-    midi_cc(0, 127, channel)
-    time.sleep_ms(PAUSE_BETWEEN_MSG)
+fs_state = debounce_init(footsw)
+ly_state = debounce_init(layer_sw)
 
-def test_cc11_sweep(channel: int):
-    log(f"CH {channel+1:02d} -> CC11 sweep 0..127")
-    for v in range(0, 128, CC11_STEP):
-        midi_cc(11, v, channel)
-        time.sleep_ms(CC11_STEP_DELAY_MS)
-    for v in range(127, -1, -CC11_STEP):
-        midi_cc(11, v, channel)
-        time.sleep_ms(CC11_STEP_DELAY_MS)
-    time.sleep_ms(PAUSE_BETWEEN_MSG)
+raw8 = adc_to_8bit(pot.read_u16())
+filt8 = raw8
 
-def test_program_changes(channel: int):
-    for name, pc_on in WHAMMY_PRESETS:
-        pc_off = pc_bypass(pc_on)
+last_pot_8_reported = filt8
+pending_pot_8 = last_pot_8_reported
+pending_pot_changed = False
 
-        log(f"CH {channel+1:02d} -> PC {pc_on:02d} ACTIVE  ({name})")
-        midi_pc(pc_on, channel)
-        time.sleep_ms(PAUSE_BETWEEN_MSG)
+last_tick_ms = time.ticks_ms()
+ch_test_0 = 0
+preset_index = 0
 
-        log(f"CH {channel+1:02d} -> PC {pc_off:02d} BYPASS  ({name})")
-        midi_pc(pc_off, channel)
-        time.sleep_ms(PAUSE_BETWEEN_MSG)
-
-print("=== Whammy 4 MIDI ANALYSE (FIXED CHANNEL) ===")
-print("Testet NUR Channel 4 (0-based = 3).")
-print("- Program Change ACTIVE/BYPASS (Manual: 1..17 / 18..34)")
-print("- CC0 ON/OFF (Manual: CC0 <65 OFF, >=65 ON)")
-print("- optional CC11 sweep (Manual: CC11 = treadle 0..127)")
-print("Abbruch: Ctrl+C\n")
+print("=== INPUT + CHANNEL TEST (1Hz) ===")
+print("Ctrl+C to stop\n")
 
 try:
     while True:
-        ch = TARGET_CH
-        log(f"\n--- TESTING CHANNEL {ch+1} ---")
+        now = time.ticks_ms()
 
-        if TEST_CC0_ON_OFF:
-            test_cc0(ch)
+        debounce_update(footsw, fs_state, now)
+        debounce_update(layer_sw, ly_state, now)
 
-        if TEST_PROGRAM_CHANGE:
-            test_program_changes(ch)
+        raw8 = adc_to_8bit(pot.read_u16())
+        filt8 = filt8 + (POT_SMOOTH_ALPHA_NUM * (raw8 - filt8)) // POT_SMOOTH_ALPHA_DEN
 
-        if TEST_CC11_SWEEP:
-            test_cc11_sweep(ch)
+        if abs(filt8 - last_pot_8_reported) >= POT_PRINT_THRESHOLD_8BIT:
+            pending_pot_8 = filt8
+            pending_pot_changed = True
 
-        # Wiederholen
-        log("\n--- LOOP RESTART (same channel) ---\n")
-        time.sleep_ms(800)
+        if (SHOWVALUES or TEST_CHANNELS) and time.ticks_diff(now, last_tick_ms) >= PRINT_EVERY_MS:
+            fs_pressed = pressed_from_pullup(fs_state["stable"])
+            ly_on = pressed_from_pullup(ly_state["stable"])
+            layer = "LAYER_2" if ly_on else "LAYER_1"
+
+            if pending_pot_changed:
+                last_pot_8_reported = pending_pot_8
+                pending_pot_changed = False
+
+            ch_1based = ch_test_0 + 1
+
+            if TEST_CHANNELS:
+                if CHANNEL_TEST_SEND_PC:
+                    _, pc = PRESETS[preset_index]
+                    midi_pc(pc, ch_test_0)
+                if CHANNEL_TEST_SEND_CC0:
+                    midi_cc(CHANNEL_TEST_CC_NUM, CHANNEL_TEST_CC_ON, ch_test_0)
+                    time.sleep_ms(CHANNEL_TEST_PULSE_MS)
+                    midi_cc(CHANNEL_TEST_CC_NUM, CHANNEL_TEST_CC_OFF, ch_test_0)
+
+            if SHOWVALUES:
+                preset_name, preset_pc = PRESETS[preset_index]
+                print(
+                    f"CH={ch_1based:02d} | "
+                    f"FOOTSW={fs_pressed} | "
+                    f"LAYER_SW={ly_on} ({layer}) | "
+                    f"POT_8bit={last_pot_8_reported:3d} | "
+                    f"PC={preset_pc:02d} {preset_name}"
+                )
+            else:
+                print(f"CH={ch_1based:02d}")
+
+            ch_test_0 = (ch_test_0 + 1) % 16
+            preset_index = (preset_index + 1) % len(PRESETS)
+            last_tick_ms = now
+
+        time.sleep_ms(POLL_MS)
 
 except KeyboardInterrupt:
-    print("\nTest gestoppt.")
+    print("\nTest stopped.")
+
