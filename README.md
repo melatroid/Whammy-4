@@ -1,4 +1,4 @@
-# --Whammy 4 - God Mode--
+# --Whammy 4 - NEO Mod--
 This is a Modification for the Digitech Whammy 4- <br>
 You get full Access to Midi Functions, with a Microcontroller inside. <br>
 Im Working on nice Software for Whammy 4, that you can easly update. <br>
