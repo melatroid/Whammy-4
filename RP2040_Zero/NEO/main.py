@@ -1,4 +1,5 @@
-# Melatroid - Whammy 4 NEO - Version 2.15
+# Melatroid - Whammy 4 NEO - Version 2.20
+
 
 from machine import UART, Pin, ADC
 import time
@@ -513,7 +514,7 @@ selection_index = 0
 
 stored_preset_index = [-1, -1]   # preset A, preset B
 
-# --- Reprogram staging (NICHT sofort überschreiben!) ---
+# --- Reprogram staging ---
 reprog_active = False
 reprog_temp = [-1, -1]
 
@@ -528,6 +529,7 @@ legacy_momentary_engaged = False
 momentary_engaged = False
 holding_armed = False
 holding_off_at = 0
+holding_wait_release = False
 
 # Shutter runtime (MIDI: Active <-> Bypass)
 shutter_active = False
@@ -660,13 +662,20 @@ def start_preset_switch_with_mute():
     stepseq_stop()
 
     pc_now = current_active_pc()
-    send_effect_off(pc_now)
-
+    if mode == MODE_LATCH and effect_enabled:
+        active_slot = 1 - active_slot
+        pc_new = current_active_pc()
+        midi_pc(pc_new)
+        return
+    
+    send_bypass_pc_only(pc_now)
+    
     active_slot = 1 - active_slot
 
     momentary_engaged = False
     holding_armed = False
     holding_off_at = 0
+    holding_wait_release = False
 
     shutter_active = False
     shutter_phase_on = False
@@ -881,7 +890,8 @@ try:
                     momentary_engaged = True
                     pc = current_active_pc()
                     send_effect_on(pc)
-                    holding_off_at = time.ticks_add(now, pot_time_ms)
+                    holding_off_at = 0
+                    holding_wait_release = True
 
             elif mode == MODE_SHUTTER:
                 # Start shutter after hold threshold; start phase = ON
@@ -1037,6 +1047,11 @@ try:
                             elif mode == MODE_HOLDING:
                                 holding_armed = False
 
+                                # Timer erst nach Release starten
+                                if momentary_engaged and holding_wait_release:
+                                    holding_off_at = time.ticks_add(now, pot_time_ms)
+                                    holding_wait_release = False
+                                    
                             elif mode == MODE_SHUTTER:
                                 pc = current_active_pc()
                                 shutter_stop(pc)  # end in bypass (CC0 once)
