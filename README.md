@@ -15,11 +15,9 @@ KEEP CALM.<br>
 # Blend Mixer - Works
 # Calibration - Works
 # Midi Access - Works
-# Editable Jammer Effect - Under Development
+# Editable Jammer Effect - Works
 # Set / Change Effectpresets with Momentory - Works
 # Fast Change Presets with Momentory - Works
 # Shutter Speed       - Works
 # Momentary / Shutter - Works
-
-# 4053BE Real Shutter - Under Development
 
