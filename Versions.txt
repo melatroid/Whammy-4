@@ -1,0 +1,9 @@
+Whammy 4 NEO 
+
+- Version 2.20
+- Bugfixes
+- Holding Time runs after Momentary
+
+- Version 2.15
+- Basic Version with Effect Box
+
