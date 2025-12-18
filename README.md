@@ -7,7 +7,7 @@ You need all modifications to use the featueres. Good Luck <br>
 !!! Attention !!!<br>
 This Modification could brick your Device!
 <h1>
-NEW SOFTWARE RELEASE SOON.<br>
+Need to find a Solution in next Days to fix noisy sound, with isolated DC/DC Converter. <br>
 Im Working at a Jailbreak that Overload the Whammy Software.<br>
 KEEP CALM.<br>
 
