@@ -8,8 +8,6 @@ You need all modifications to use the featueres. Good Luck <br>
 This Modification could brick your Device!
 <h1>
 Need to find a Solution in next Days to fix noisy sound, with isolated DC/DC Converter. <br>
-Im Working at a Jailbreak that Overload the Whammy Software.<br>
-KEEP CALM.<br>
 
 # True Bypass - Works
 # Blend Mixer - Works
