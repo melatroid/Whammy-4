@@ -609,14 +609,20 @@ def apply_current_sound():
             send_effect_off(pc)
 
     elif mode in (MODE_SHUTTER, MODE_HARMONY, MODE_STEPSEQ):
-        # TOGGLE MODES: start in OFF state, do NOT arm CC here
-        midi_cc(0, 0)
-        midi_pc(pc_bypass(pc))
 
+        if press_dur <= TAP_MAX_MS:
+            if time.ticks_diff(now, last_release_ms) <= DOUBLE_TAP_WINDOW_MS:
+                last_release_ms = 0
+
+                if mode == MODE_HARMONY:
+                    cycle_harmony_mode()
+                elif mode == MODE_STEPSEQ:
+                    stepseq_cycle_mode()
+            else:
+                last_release_ms = now
     else:
         send_effect_off(pc)
 
-    # reset transient states
     momentary_engaged = False
     holding_armed = False
     holding_off_at = 0
