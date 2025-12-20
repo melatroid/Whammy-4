@@ -1,4 +1,11 @@
 Whammy 4 NEO 
+- Version 2.21
+- Bugfixes
+- Direct Momentary Fix
+- Ignore Physic for Layer Switch
+- Random Step-Sequenz for eacht tap
+- Better Times
+- Step/Shutter now starts directly
 
 - Version 2.20
 - Bugfixes
