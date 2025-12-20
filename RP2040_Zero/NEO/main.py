@@ -31,8 +31,8 @@ TAP_MAX_MS = 900
 LAYER2_TAP_MAX_MS = 900
 DOUBLE_TAP_WINDOW_MS = 320
 
-# Momentary/Holding/Shutter/Harmony/StepSeq trigger (must be higher than tap)
-MOMENTARY_HOLD_MS = 200
+# Momentary/Holding trigger
+MOMENTARY_HOLD_MS = 100
 
 # re-enter preset programming from Layer 2 via long-hold
 LAYER2_REPROGRAM_HOLD_MS = 2000
@@ -173,7 +173,9 @@ SETTINGS = [
     ("Mode: Shutter (pot timeout)", 16),          # idx 3
     ("Mode: Harmony (pot timeout)", 14),          # idx 4
     ("Mode: Step Sequenzer       ", 12),          # idx 5
-    ("Mode: Legacy  No Presets   ", 7),           # idx 6
+    ("Mode: Change Preset 1      ", 5),           # idx 6
+    ("Mode: Change Preset 2      ", 6),           # idx 7
+    ("Mode: Legacy  No Presets   ", 7),           # idx 8
 ]
 
 BYPASS_OFFSET = 17
@@ -508,6 +510,10 @@ stored_preset_index = [-1, -1]   # preset A, preset B
 reprog_active = False
 reprog_temp = [-1, -1]
 
+# If set to 0 or 1, only that preset slot is reprogrammed (and then exit).
+# If -1, reprogram both (legacy behavior / full reprogram).
+reprog_target_slot = -1
+
 # Performance state
 active_slot = 0
 effect_enabled = True
@@ -603,7 +609,8 @@ def apply_current_sound():
             send_effect_off(pc)
 
     elif mode in (MODE_SHUTTER, MODE_HARMONY, MODE_STEPSEQ):
-        midi_cc(0, 127)
+        # TOGGLE MODES: start in OFF state, do NOT arm CC here
+        midi_cc(0, 0)
         midi_pc(pc_bypass(pc))
 
     else:
@@ -653,6 +660,11 @@ def start_preset_switch_with_mute():
     harmony_stop()
     stepseq_stop()
 
+    # stop shutter if running
+    if shutter_active:
+        pc = current_active_pc()
+        shutter_stop(pc)
+
     pc_now = current_active_pc()
     if mode == MODE_LATCH and effect_enabled:
         active_slot = 1 - active_slot
@@ -695,12 +707,68 @@ def on_double_tap_layer1():
     start_preset_switch_with_mute()
 
 
+def restart_single_preset_programming(slot: int):
+    """
+    Reprogram only preset slot 0 or 1, then return to performance immediately.
+    """
+    global programming_done, stage, selection_index, scan_direction
+    global scan_paused, last_scan_step_ms
+    global pending_single_tap, layer2_long_hold_fired
+    global shutter_active
+    global reprog_active, reprog_temp, stored_preset_index, reprog_target_slot
+    global legacy_momentary_engaged
+    global stepseq_active
+
+    pending_single_tap = False
+    legacy_momentary_engaged = False
+
+    harmony_stop()
+    stepseq_stop()
+
+    # stop shutter if running
+    if shutter_active:
+        pc = current_active_pc()
+        shutter_stop(pc)
+
+    reprog_active = True
+    reprog_temp = stored_preset_index[:]  # copy
+    reprog_target_slot = slot  # only one preset
+
+    stage = slot  # 0 => preset 1, 1 => preset 2
+    selection_index = reprog_temp[slot] if reprog_temp[slot] >= 0 else 0
+
+    scan_direction = 1
+    scan_paused = False
+    last_scan_step_ms = time.ticks_ms()
+
+    programming_done = False
+    layer2_long_hold_fired = True
+
+    stepseq_active = False
+
+    blink_selected_channel()
+    show_boot_scan_item()
+
+
 def apply_scanned_setting_and_exit():
     global mode, runtime_layer, scan_paused
     global legacy_momentary_engaged
 
     idx = selected_setting_index
 
+    # Change preset 1/2 re-enters programming (single slot)
+    if idx == 6:
+        runtime_layer = LAYER_PRESET
+        scan_paused = False
+        restart_single_preset_programming(0)
+        return
+    if idx == 7:
+        runtime_layer = LAYER_PRESET
+        scan_paused = False
+        restart_single_preset_programming(1)
+        return
+
+    # normal mode selection
     if idx == 0:
         mode = MODE_LATCH
     elif idx == 1:
@@ -713,7 +781,7 @@ def apply_scanned_setting_and_exit():
         mode = MODE_HARMONY
     elif idx == 5:
         mode = MODE_STEPSEQ
-    elif idx == 6:
+    elif idx == 8:
         mode = MODE_LEGACY
     else:
         mode = MODE_LATCH
@@ -736,9 +804,10 @@ def restart_preset_programming():
     global pending_single_tap, layer2_long_hold_fired
     global momentary_engaged, holding_armed, holding_off_at
     global shutter_active, shutter_phase_on, shutter_next_toggle_at
-    global reprog_active, reprog_temp, stored_preset_index
+    global reprog_active, reprog_temp, stored_preset_index, reprog_target_slot
     global harmony_active, harmony_next_step_at
     global legacy_momentary_engaged
+    global stepseq_active
 
     pending_single_tap = False
     legacy_momentary_engaged = False
@@ -746,8 +815,14 @@ def restart_preset_programming():
     harmony_stop()
     stepseq_stop()
 
+    # stop shutter if running
+    if shutter_active:
+        pc = current_active_pc()
+        shutter_stop(pc)
+
     reprog_active = True
     reprog_temp = stored_preset_index[:]  # copy
+    reprog_target_slot = -1  # full reprogram
 
     stage = 0
     selection_index = reprog_temp[0] if reprog_temp[0] >= 0 else 0
@@ -761,11 +836,15 @@ def restart_preset_programming():
     momentary_engaged = False
     holding_armed = False
     holding_off_at = 0
+
     shutter_active = False
     shutter_phase_on = False
     shutter_next_toggle_at = 0
+
     harmony_active = False
     harmony_next_step_at = 0
+
+    stepseq_active = False
 
     blink_selected_channel()
     show_boot_scan_item()
@@ -835,46 +914,30 @@ try:
 
         # Holding auto-OFF (Layer 1 only) - disabled in Legacy
         if (programming_done and runtime_layer == LAYER_PRESET and mode == MODE_HOLDING
-                and momentary_engaged and mode != MODE_LEGACY):
+                and stable_sw == 0 and holding_armed and (not momentary_engaged)
+                and (not switch_apply_pending)):
 
-            if (not holding_wait_release) and holding_off_at != 0 and time.ticks_diff(now, holding_off_at) >= 0:
+            if time.ticks_diff(now, press_start_ms) >= MOMENTARY_HOLD_MS:
                 pc = current_active_pc()
-                send_effect_off(pc)
-                momentary_engaged = False
-                holding_off_at = 0
+                send_effect_on(pc)
+                momentary_engaged = True
+                holding_wait_release = True
+                holding_armed = False
 
-        # Momentary/Holding/Shutter/Harmony/StepSeq trigger (Layer 1 only, disabled during preset-switch mute)
-        if programming_done and runtime_layer == LAYER_PRESET and stable_sw == 0 and (not switch_apply_pending):
-            if mode == MODE_LEGACY:
-                pass
+        if (programming_done and runtime_layer == LAYER_PRESET and mode == MODE_HOLDING
+                and momentary_engaged and (not holding_wait_release)
+                and holding_off_at != 0 and time.ticks_diff(now, holding_off_at) >= 0):
 
-            elif mode == MODE_HOLDING:
-                if (not holding_armed) and (not momentary_engaged) and time.ticks_diff(now, press_start_ms) >= MOMENTARY_HOLD_MS:
-                    holding_armed = True
-                    momentary_engaged = True
-                    pc = current_active_pc()
-                    send_effect_on(pc)
-                    holding_off_at = 0
-                    holding_wait_release = True
+            pc = current_active_pc()
+            send_effect_off(pc)
+            momentary_engaged = False
+            holding_off_at = 0
+        # =========================================================
+        # TOGGLE ENGINES STEP (no longer depends on holding the switch)
+        # =========================================================
 
-            elif mode == MODE_SHUTTER:
-                if (not shutter_active) and time.ticks_diff(now, press_start_ms) >= MOMENTARY_HOLD_MS:
-                    shutter_active = True
-                    shutter_phase_on = True
-                    pc = current_active_pc()
-                    shutter_start(pc)
-                    shutter_next_toggle_at = time.ticks_add(now, pot_time_ms)
-
-            elif mode == MODE_HARMONY:
-                if (not harmony_active) and time.ticks_diff(now, press_start_ms) >= MOMENTARY_HOLD_MS:
-                    harmony_start(now)
-
-            elif mode == MODE_STEPSEQ:
-                if (not stepseq_active) and time.ticks_diff(now, press_start_ms) >= MOMENTARY_HOLD_MS:
-                    stepseq_start(now)
-
-        # Shutter toggling
-        if programming_done and runtime_layer == LAYER_PRESET and mode == MODE_SHUTTER and stable_sw == 0 and shutter_active:
+        # Shutter toggling (runs while shutter_active)
+        if programming_done and runtime_layer == LAYER_PRESET and mode == MODE_SHUTTER and shutter_active:
             if time.ticks_diff(now, shutter_next_toggle_at) >= 0:
                 pc = current_active_pc()
                 if shutter_phase_on:
@@ -885,13 +948,13 @@ try:
                     shutter_phase_on = True
                 shutter_next_toggle_at = time.ticks_add(now, pot_time_ms)
 
-        # Harmony runner stepping
-        if programming_done and runtime_layer == LAYER_PRESET and mode == MODE_HARMONY and stable_sw == 0 and harmony_active:
+        # Harmony runner stepping (runs while harmony_active)
+        if programming_done and runtime_layer == LAYER_PRESET and mode == MODE_HARMONY and harmony_active:
             if time.ticks_diff(now, harmony_next_step_at) >= 0:
                 harmony_step(now)
 
-        # StepSeq runner stepping
-        if programming_done and runtime_layer == LAYER_PRESET and mode == MODE_STEPSEQ and stable_sw == 0 and stepseq_active:
+        # StepSeq runner stepping (runs while stepseq_active)
+        if programming_done and runtime_layer == LAYER_PRESET and mode == MODE_STEPSEQ and stepseq_active:
             if time.ticks_diff(now, stepseq_next_step_at) >= 0:
                 stepseq_step(now)
 
@@ -917,14 +980,18 @@ try:
                 press_layer = runtime_layer
 
                 if programming_done:
-                    momentary_engaged = False
-                    holding_armed = False
-                    holding_off_at = 0
-                    holding_wait_release = False
-
-                    shutter_active = False
-                    shutter_phase_on = False
-                    shutter_next_toggle_at = 0
+                    # Don't blindly reset Holding state here, otherwise Holding can't work reliably.
+                    if mode != MODE_HOLDING:
+                        momentary_engaged = False
+                        holding_armed = False
+                        holding_off_at = 0
+                        holding_wait_release = False
+                    else:
+                        # Holding: start a new press-cycle
+                        holding_armed = False
+                        holding_off_at = 0
+                        # momentary_engaged stays as-is (it may already be ON from a previous hold)
+                        holding_wait_release = False
 
                     layer2_long_hold_fired = False
 
@@ -940,6 +1007,50 @@ try:
                         send_effect_on(pc)
                         momentary_engaged = True
                         pending_single_tap = False
+
+                    # Holding: arm on press, effect turns ON after MOMENTARY_HOLD_MS
+                    elif runtime_layer == LAYER_PRESET and mode == MODE_HOLDING and (not switch_apply_pending):
+                        holding_armed = True
+                        holding_off_at = 0
+                        holding_wait_release = False
+                        pending_single_tap = False
+
+
+                    # ✅ TOGGLE MODES: Shutter / Harmony / StepSeq  (Single Tap = CC ON/OFF)
+                    elif runtime_layer == LAYER_PRESET and (not switch_apply_pending) and mode in (MODE_SHUTTER, MODE_HARMONY, MODE_STEPSEQ):
+                        # If currently running -> STOP (CC OFF)
+                        if mode == MODE_SHUTTER and shutter_active:
+                            pc = current_active_pc()
+                            shutter_stop(pc)
+                            shutter_active = False
+                            shutter_phase_on = False
+                            shutter_next_toggle_at = 0
+                            pending_single_tap = False
+
+                        elif mode == MODE_HARMONY and harmony_active:
+                            harmony_stop()
+                            pending_single_tap = False
+
+                        elif mode == MODE_STEPSEQ and stepseq_active:
+                            stepseq_stop()
+                            pending_single_tap = False
+
+                        # If not running -> START (CC ON immediately)
+                        else:
+                            if mode == MODE_SHUTTER:
+                                shutter_active = True
+                                shutter_phase_on = True
+                                pc = current_active_pc()
+                                shutter_start(pc)  # CC ON immediately + initial PC
+                                shutter_next_toggle_at = time.ticks_add(now, pot_time_ms)
+
+                            elif mode == MODE_HARMONY:
+                                harmony_start(now)  # CC ON immediately + initial PC
+
+                            elif mode == MODE_STEPSEQ:
+                                stepseq_start(now)  # CC ON immediately + initial PC
+
+                            pending_single_tap = False
 
                     # freeze Layer 2 selection while pressing
                     if runtime_layer == LAYER_EFFECT:
@@ -959,6 +1070,7 @@ try:
                         confirm_saved_preset_pc_only(pc)
 
                     else:
+                        # Boot-mode selection (stage 2)
                         if selection_index == 0:
                             mode = MODE_LATCH
                         elif selection_index == 1:
@@ -972,7 +1084,7 @@ try:
                         elif selection_index == 5:
                             mode = MODE_STEPSEQ
                             stepseq_generate_base()
-                        elif selection_index == 6:
+                        elif selection_index == 8:  # ✅ FIX: Legacy is idx 8
                             mode = MODE_LEGACY
                         else:
                             mode = MODE_LATCH
@@ -1017,13 +1129,21 @@ try:
 
                             elif mode == MODE_HOLDING:
                                 holding_armed = False
+                                
+                                if (press_dur < MOMENTARY_HOLD_MS) and (not momentary_engaged) and (not switch_apply_pending):
+                                    pc = current_active_pc()
+                                    send_effect_on(pc)
+                                    send_effect_off(pc)
+                                    momentary_engaged = False
+                                    holding_wait_release = False
+                                    holding_off_at = 0
 
                                 # If holding was engaged: schedule OFF
                                 if momentary_engaged and holding_wait_release:
                                     holding_off_at = time.ticks_add(now, pot_time_ms)
                                     holding_wait_release = False
 
-                                # ✅ Double-tap preset switch (short taps only)
+
                                 if press_dur < MOMENTARY_HOLD_MS:
                                     if time.ticks_diff(now, last_release_ms) <= DOUBLE_TAP_WINDOW_MS:
                                         last_release_ms = 0
@@ -1033,31 +1153,11 @@ try:
                                         last_release_ms = now
                                     pending_single_tap = False
 
-                            elif mode == MODE_SHUTTER:
-                                pc = current_active_pc()
-                                shutter_stop(pc)
-                                shutter_active = False
-                                shutter_phase_on = False
-                                shutter_next_toggle_at = 0
+                            elif mode in (MODE_SHUTTER, MODE_HARMONY, MODE_STEPSEQ):
+                                # ✅ Toggle modes: do nothing on release
+                                pass
 
-                            elif mode == MODE_HARMONY:
-                                harmony_stop()
-
-                            elif mode == MODE_STEPSEQ:
-                                stepseq_stop()
-
-                            # Harmony: short tap cycles mode
-                            if mode == MODE_HARMONY and press_dur < MOMENTARY_HOLD_MS:
-                                cycle_harmony_mode()
-                                pending_single_tap = False
-
-                            # StepSeq: short tap cycles mode
-                            elif mode == MODE_STEPSEQ and press_dur < MOMENTARY_HOLD_MS:
-                                stepseq_cycle_mode()
-                                pending_single_tap = False
-
-                            # Latch: tap / double tap
-                            elif mode == MODE_LATCH:
+                            if mode == MODE_LATCH:
                                 if press_dur <= LAYER2_TAP_MAX_MS:
                                     if pending_single_tap and time.ticks_diff(now, last_release_ms) <= DOUBLE_TAP_WINDOW_MS:
                                         pending_single_tap = False
@@ -1066,7 +1166,6 @@ try:
                                         pending_single_tap = True
                                         last_release_ms = now
                                         pending_single_tap_deadline = time.ticks_add(now, DOUBLE_TAP_WINDOW_MS)
-
                             else:
                                 pending_single_tap = False
 
@@ -1095,7 +1194,24 @@ try:
                     # Boot programming stage advance
                     if stage < (STAGES - 1):
 
-                        if stage == 1 and reprog_active:
+                        # ✅ If we are reprogramming only ONE preset slot, finish immediately after saving it
+                        if reprog_active and reprog_target_slot != -1 and stage == reprog_target_slot:
+                            stored_preset_index = reprog_temp[:]
+                            reprog_active = False
+                            reprog_target_slot = -1
+
+                            programming_done = True
+                            scan_paused = True
+
+                            runtime_layer = LAYER_PRESET
+                            active_slot = 0
+                            effect_enabled = True
+                            legacy_momentary_engaged = False
+                            apply_current_sound()
+                            continue
+
+                        # legacy: commit after stage 1 when reprogramming both
+                        if stage == 1 and reprog_active and reprog_target_slot == -1:
                             stored_preset_index = reprog_temp[:]
                             reprog_active = False
 
@@ -1117,6 +1233,7 @@ try:
                         programming_done = True
                         scan_paused = True
                         reprog_active = False
+                        reprog_target_slot = -1
 
                         runtime_layer = LAYER_PRESET
                         active_slot = 0
