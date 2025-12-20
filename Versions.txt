@@ -6,6 +6,7 @@ Whammy 4 NEO
 - Random Step-Sequenz for eacht tap
 - Better Times
 - Step/Shutter now starts directly
+- Harmony 3 Modis Bugfix
 
 - Version 2.20
 - Bugfixes
