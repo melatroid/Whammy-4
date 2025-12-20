@@ -1,8 +1,5 @@
 # Melatroid - Whammy 4 NEO - Version 2.21
 
-# 1) Holding: Double-tap preset switch works 
-# 2) Layer switch: Flip-Flop / Toggle behavior 
-
 from machine import UART, Pin, ADC
 import time
 import urandom
