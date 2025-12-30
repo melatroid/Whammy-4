@@ -6,6 +6,9 @@ You need all modifications to use the featueres. Good Luck <br>
 
 https://youtu.be/c9xXXsvPOFA
 
+Whammy 5 -->
+https://github.com/melatroid/Whammy-5
+
 <h1>
 !!! Attention !!!<br>
 This Modification could brick your Device!
